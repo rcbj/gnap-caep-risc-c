@@ -9,6 +9,10 @@
 The management API token is minted as sts-api-client (client_credentials, HTTP Basic), audienced
 to <base>/admin-api, scope admin:read admin:write. The secret is ADMIN_API_CLIENT_SECRET or
 STS_ADMIN_API_CLIENT_SECRET. The running container's PORT wins over the shell PORT.
+
+Every run writes iya-sts's listener CA trust chain (leaf, TLS Issuing CA, Intermediate, Root) to the
+file tlsCa names, through scripts/trust_chain.py. The demo image build copies that file in, so
+rebuild the image after running this against a different iya-sts.
 """
 
 import base64
@@ -49,7 +53,8 @@ def usage():
                   URI follows the running demo's PORT, then $PORT. A non-loopback finish URI is
                   left as written.
   --test-user     The test user to create (default: gnap-demo-user). Its password is
-                  $GNAP_DEMO_USER_PASSWORD, or one is generated and printed once. With that variable
+                  $GNAP_DEMO_USER_PASSWORD, or one is generated and written to
+                  generated/<name>.password beside the configuration (mode 0600), never printed. With that variable
                   set, an existing user's password is replaced.
   --no-test-user  Do not create a test user.
   --dry-run       Print what would be done, and send nothing.
@@ -311,7 +316,9 @@ def _send(url, method, headers, body):
         outgoing["content-length"] = str(len(payload))
     try:
         if parts.scheme == "https":
-            conn = http.client.HTTPSConnection(parts.hostname, port, context=ssl._create_unverified_context(), timeout=15)
+            context = ssl._create_unverified_context()
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
+            conn = http.client.HTTPSConnection(parts.hostname, port, context=context, timeout=15)
         else:
             conn = http.client.HTTPConnection(parts.hostname, port, timeout=15)
         conn.request(method, path, body=payload, headers=outgoing)
@@ -497,6 +504,8 @@ def main(argv=None):
         print(f"  trust anchor {chain['anchor_subject']}")
         print(f"  sha256 {chain['anchor_fingerprint']}")
         print("  Compare the anchor with the Root CA on iya-sts's Server configuration, PKI page.")
+        print("  The demo image build copies this file in: rebuild it (docker compose up --build) after running this")
+        print("  against a different iya-sts.")
     secret = os.environ.get("ADMIN_API_CLIENT_SECRET") or os.environ.get("STS_ADMIN_API_CLIENT_SECRET") or ""
     if not secret:
         raise RuntimeError("neither ADMIN_API_CLIENT_SECRET nor STS_ADMIN_API_CLIENT_SECRET is set, so no /admin-api token can be minted.")
@@ -535,6 +544,13 @@ def main(argv=None):
             continue
         answered = api(call["path"][len(f"{base}/admin-api"):], call["body"])
         errors = " ".join(_errors(answered["body"]))
+        # An iya-sts without the gnap_access_token claim set refuses it as "not one of" the sets it
+        # knows. The uid claim only names the person on the demo's page, so sign-in works without it.
+        if (call["path"].endswith("/applications/set-custom-claim")
+                and not answered["body"].get("ok")
+                and "not one of" in errors):
+            print(f"  {call['why']}: this iya-sts has no {call['body'].get('set')} claim set; continuing.")
+            continue
         if not answered["body"].get("ok") and "already" not in errors.lower():
             raise RuntimeError(f"{call['why']}: refused: {json.dumps(answered['body'])[:400]}")
         if not answered["body"].get("ok"):
@@ -568,7 +584,15 @@ def main(argv=None):
                 raise RuntimeError(f"creating {args['test_user']} was refused: {json.dumps(made['body'])[:300]}")
             print(f"Created user {args['test_user']}.")
             if made["body"].get("password"):
-                print(f"Generated password for {args['test_user']} (shown once): {made['body']['password']}")
+                # Never printed: a password does not belong in a log. It goes to a file only its
+                # owner can read, in demo/generated beside the client key, which never enters an image.
+                saved = Path(args["config"]).parent / "generated" / f"{args['test_user']}.password"
+                saved.parent.mkdir(parents=True, exist_ok=True)
+                descriptor = os.open(saved, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                with os.fdopen(descriptor, "w", encoding="utf-8") as out:
+                    out.write(made["body"]["password"] + "\n")
+                os.chmod(saved, 0o600)
+                print(f"Generated a password for {args['test_user']}; it is in {saved} (readable by you only).")
         for call in plan:
             if not call["path"].endswith("/groups/add-member"):
                 continue
@@ -581,7 +605,7 @@ def main(argv=None):
     print(f"grant:       {files['grantEndpoint']}")
     print(f"finish:      {files['finishUri']}")
     print(f"proof:       {files['keyProof']}")
-    print("Done. Start the demo with: docker compose up --build")
+    print("Done. Start the demo with: docker compose up --build (the build copies tlsCa's trust chain in)")
     return 0
 
 

@@ -16,7 +16,17 @@ auto done = client.finish_redirect(query, {started.pending_id});
 docker build --target test .
 ```
 
-That command is the suite. The demo image does not run it. Tests use an in-process stub on 127.0.0.1. They do not need a live authorization server.
+That command is the suite. The demo image does not run it. Tests use an in-process stub on 127.0.0.1. They do not need a live authorization server. `tests/trust.cpp` covers the `tlsCa` chain, a forged leaf, the host name (with `tlsCa` and with the system roots), the mtls client certificate against a CertificateRequest naming another CA, and `trust_chain.py`.
+
+## Live test and nightly
+
+`python3 scripts/live_iya_sts.py` (host stdlib python3 and Docker; never CMake or a compiler on the host) starts a fresh iya-sts `main` in memory mode as container `iya-sts-live-gnap-caep-risc-c` on `LIVE_STS_PORT` (default 18527), copies the checkout to a scratch build context, builds the demo image, makes the client key and certificate with the image's openssl, runs `scripts/configure_iya_sts.py` on the host against that copy (which writes the trust chain; a `gnap_access_token` claim set refused as "not one of" is skipped, any other refusal fails), rebuilds the image (which bakes the chain in), checks the image's chain equals the saved one and that nothing else of `demo/generated` is in it, runs `gnap-caep-risc-c-live-demo` with `--network host` on `LIVE_DEMO_PORT` (default 18627) mounting only `client.key` and `client.crt` and with `TLS_CA_REFRESH=0`, signs in through `/authn-api` and `/gnap-api/approve`, emits `credential-change` then `session-revoked`, and checks `GET /live-status`. `IYA_STS_URL` and `IYA_STS_IMAGE` select an existing iya-sts or image. It never binds 3000, 8081 or 18481-18495. Always against a fresh iya-sts (a re-registered GNAP key is refused). Secrets reach `docker run` as `-e NAME` and are never printed; log lines name requests by fixed labels. `.github/workflows/nightly.yml` runs the unit image and the live script at 07:46 UTC (`46 7 * * *`).
+
+`/live-status` is `{signedIn, subject, receiver, events: [{type, jti}]}`, never tokens. The demo (not the library) ends cookie sessions by the grant id the receiver tracks, tracks every grant, and ends its one local session on a `session-revoked` that matched none (`remember` in `src/demo_main.cpp`).
+
+## tlsCa, the iya-sts trust chain
+
+`tlsCa` (demo default `generated/idp-ca.pem`) is iya-sts's listener CA trust chain. `scripts/configure_iya_sts.py` writes the whole chain on every run via `scripts/trust_chain.py` (`GET /tls/server-certificate`, falling back to the handshake) and prints the path, anchor subject and SHA-256. It never prints a generated test-user password: that goes to `demo/generated/<user>.password` (0600). `src/http.cpp` (`verify_pinned`) verifies the presented chain to an anchor in the file, or accepts only when the presented LEAF is itself in the file, and checks the host name either way; without `tlsCa` it uses the system roots and sets `SSL_set1_host` / `X509_VERIFY_PARAM_set1_ip_asc` (no SNI for an IP literal). The client certificate is set on the connection with `SSL_use_certificate`, so OpenSSL sends it whatever CA names the CertificateRequest carries. The test and build stages copy only `CMakeLists.txt`, `VERSION`, `include`, `src`, `tests` (and `scripts` for the suite); the demo stage then does `COPY demo demo`, and `.dockerignore` excludes `demo/generated/*` except `idp-ca.pem`, so the image carries the chain and no key, and a build without it still succeeds. Rebuild the demo image after re-running the install script against a different iya-sts. The image's CMD still refreshes the chain at start unless `TLS_CA_REFRESH=0`.
 
 ## Layout
 
@@ -25,11 +35,11 @@ That command is the suite. The demo image does not run it. Tests use an in-proce
 - `src/` the only protocol implementation: JSON, HTTP/1.1, key proofs (mtls, httpsig, jwsd), the grant client, and one poll stream
 - `tests/` C cases plus one C++ smoke test, both linked to the `iya_gnap` library
 - `src/demo_main.cpp` the HTTP demo; `demo/gnap.json` the sample configuration
-- `scripts/configure_iya_sts.py` registers the app; `scripts/redirects.py` and `scripts/trust_chain.py` support it
+- `scripts/configure_iya_sts.py` registers the app and writes the `tlsCa` chain; `scripts/redirects.py` and `scripts/trust_chain.py` support it; `scripts/live_iya_sts.py` is the live sign-in
 
 ## Demo
 
-`PORT` defaults to 3000 and is the bind port. The demo listens on `PORT`. Loopback redirect and finish URLs follow `PORT`. `PUBLIC_URL` or `--public-url` replaces the origin and keeps the path. `GET /healthz` returns `ok`. `ssf.pollIntervalMs` is a millisecond interval.
+`PORT` defaults to 3000 and is the bind port. The demo listens on `PORT`. Loopback redirect and finish URLs follow `PORT`. `PUBLIC_URL` or `--public-url` replaces the origin and keeps the path. `GET /healthz` returns `ok`. `GET /live-status` is the JSON above. `ssf.pollIntervalMs` is a millisecond interval.
 
 ## Signals
 

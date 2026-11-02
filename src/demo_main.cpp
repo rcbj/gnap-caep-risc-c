@@ -258,6 +258,51 @@ struct Demo {
   std::unique_ptr<iya::gnap::SignalsReceiver> receiver;
   bool has_latest = false;
   Grant latest;
+  // For GET /live-status: the receiver's state, and the type and jti of each event it accepted.
+  // No tokens.
+  std::string receiver_state = "not started (no sign-in yet)";
+  std::vector<std::pair<std::string, std::string>> live_events;
+
+  // The id the receiver knows a session by: the grant id, or the subject.
+  static std::string tracked_id(const Grant& grant) {
+    return grant.grant_id.empty() ? grant.subject.sub : grant.grant_id;
+  }
+
+  // Ends every cookie session whose grant the receiver tracks under one of ids. The cookie id and the
+  // tracked id differ, so this looks the sessions up by grant. Call with session_mu held.
+  void end_tracked(const std::vector<std::string>& ids) {
+    for (auto it = sessions.begin(); it != sessions.end();) {
+      std::string known = tracked_id(it->second.grant);
+      bool drop = false;
+      for (const auto& id : ids)
+        if (!known.empty() && known == id) drop = true;
+      if (drop) it = sessions.erase(it);
+      else ++it;
+    }
+  }
+
+  // Records an accepted event for /live-status. A session-revoked event that ended no tracked session
+  // still ends this demo's one local session, if it has exactly one: the event can name the sign-on
+  // session by an id the grant did not carry.
+  void remember(const iya::gnap::SignalEvent& event) {
+    std::string orphan;
+    iya::gnap::SignalsReceiver* rx = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(session_mu);
+      live_events.emplace_back(event.type, event.jti);
+      if (live_events.size() > 100) live_events.erase(live_events.begin());
+      if (event.type == iya::gnap::kEventSessionRevoked && !event.ended && sessions.size() == 1) {
+        orphan = tracked_id(sessions.begin()->second.grant);
+        sessions.clear();
+        rx = receiver.get();
+      }
+    }
+    if (rx != nullptr) {
+      std::printf("ssf: session-revoked matched no tracked session; ending this demo's one local session\n");
+      std::fflush(stdout);
+      if (!orphan.empty()) rx->untrack(orphan);
+    }
+  }
 
   std::string seal(const std::string& payload) const {
     std::string encoded = b64url_encode(payload);
@@ -375,11 +420,19 @@ struct Demo {
       std::lock_guard<std::mutex> lock(session_mu);
       latest = grant;
       has_latest = true;
-      if (receiver) return;
+      if (receiver) {
+        // Every grant is tracked, not only the first.
+        receiver->track(tracked_id(grant), person.sub, person.email, person.sid);
+        return;
+      }
     }
     std::string transmitter;
     int interval = 5000;
-    if (!signals_wanted(transmitter, interval)) return;
+    if (!signals_wanted(transmitter, interval)) {
+      std::lock_guard<std::mutex> lock(session_mu);
+      receiver_state = "not configured (signals are off, or no ssf.transmitter)";
+      return;
+    }
     Client* current = nullptr;
     {
       std::lock_guard<std::mutex> lock(session_mu);
@@ -392,7 +445,7 @@ struct Demo {
           transmitter,
           [this](const std::vector<std::string>& ids, const iya::gnap::SignalEvent&) {
             std::lock_guard<std::mutex> lock(session_mu);
-            for (const auto& id : ids) sessions.erase(id);
+            end_tracked(ids);
           },
           [this](const std::string& method, const std::string& url, const std::string& body) {
             Grant copy;
@@ -414,17 +467,20 @@ struct Demo {
           },
           interval);
       created->set_tls(tls);
+      created->on("*", [this](const iya::gnap::SignalEvent& event) { remember(event); });
       created->start();
-      std::string local = grant.grant_id.empty() ? person.sub : grant.grant_id;
-      created->track(local, person.sub, person.email, person.sid);
+      created->track(tracked_id(grant), person.sub, person.email, person.sid);
       std::lock_guard<std::mutex> lock(session_mu);
       if (receiver) {
         created->stop();
         return;
       }
+      receiver_state = "polling stream " + created->stream_id() + " at " + transmitter;
       receiver = std::move(created);
     } catch (const std::exception& ex) {
       std::printf("ssf: not started: %s\n", ex.what());
+      std::lock_guard<std::mutex> lock(session_mu);
+      receiver_state = std::string("not running: ") + ex.what();
     }
   }
 
@@ -615,6 +671,33 @@ struct Demo {
     }
   }
 
+  // JSON for scripts/live_iya_sts.py: whether this browser is signed in, as whom, the receiver's
+  // state, and the type and jti of every event received. It carries no tokens.
+  void live_status(int fd, const Request& req) {
+    Session opened;
+    bool signed_in = session_of(req, opened);
+    Json body = Json::object();
+    body.set("signedIn", Json::boolean(signed_in));
+    std::string who;
+    if (signed_in) {
+      who = !opened.person.email.empty() ? opened.person.email : !opened.person.name.empty() ? opened.person.name : opened.person.sub;
+    }
+    body.set("subject", who.empty() ? Json::nul() : Json::str(who));
+    Json events = Json::array();
+    {
+      std::lock_guard<std::mutex> lock(session_mu);
+      body.set("receiver", Json::str(receiver_state));
+      for (const auto& item : live_events) {
+        Json one = Json::object();
+        one.set("type", Json::str(item.first));
+        one.set("jti", Json::str(item.second));
+        events.push(std::move(one));
+      }
+    }
+    body.set("events", std::move(events));
+    respond(fd, 200, "OK", "application/json", body.dump(), {{"Cache-Control", "no-store"}});
+  }
+
   void static_file(int fd, const std::string& name, const std::string& type) {
     std::string text;
     std::string error;
@@ -628,6 +711,10 @@ struct Demo {
   void handle(int fd, const Request& req) {
     if (req.path == "/healthz" && req.method == "GET") {
       respond(fd, 200, "OK", "text/plain", "ok", {});
+      return;
+    }
+    if (req.path == "/live-status" && req.method == "GET") {
+      live_status(fd, req);
       return;
     }
     if (req.path == "/styles.css" && req.method == "GET") {
