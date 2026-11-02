@@ -33,6 +33,10 @@ target_include_directories(gnap_c_tests PRIVATE tests src include)
 target_link_libraries(gnap_c_tests PRIVATE iya_gnap)
 set_target_properties(gnap_c_tests PROPERTIES LINKER_LANGUAGE CXX)
 
+add_executable(gnap_trust_tests tests/trust.cpp)
+target_include_directories(gnap_trust_tests PRIVATE src include)
+target_link_libraries(gnap_trust_tests PRIVATE iya_gnap OpenSSL::SSL OpenSSL::Crypto Threads::Threads)
+
 add_executable(gnap_cpp_smoke tests/cpp_smoke.cpp)
 target_link_libraries(gnap_cpp_smoke PRIVATE iya_gnap)
 
@@ -61,5 +65,17 @@ set(IYA_GNAP_CTESTS
   TestPollsWithTheGNAPTokenAndAcknowledges)
 foreach(name ${IYA_GNAP_CTESTS})
   add_test(NAME ${name} COMMAND gnap_c_tests ${name})
+endforeach()
+# tlsCa, the host name, the forged leaf, the mtls client certificate, and trust_chain.py.
+set(IYA_GNAP_TRUST_TESTS
+  TestTlsCaChainIsTheTrustStore
+  TestAForgedLeafBeforeTheRealCaIsRefused
+  TestHostNameIsChecked
+  TestHostNameIsCheckedWithoutTlsCa
+  TestClientPresentsItsSelfSignedCertWhenTheCaListNamesAnother
+  TestConfigureWritesTheWholeChain)
+foreach(name ${IYA_GNAP_TRUST_TESTS})
+  add_test(NAME ${name} COMMAND gnap_trust_tests ${name})
+  set_tests_properties(${name} PROPERTIES WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} TIMEOUT 180)
 endforeach()
 add_test(NAME CppSmoke COMMAND gnap_cpp_smoke)

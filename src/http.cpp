@@ -350,7 +350,24 @@ Answer http_send(const std::string& url, const std::string& method, const std::m
     }
     ssl.reset(SSL_new(ctx.get()));
     SSL_set_fd(ssl.get(), fd.get());
-    SSL_set_tlsext_host_name(ssl.get(), host.c_str());
+    in_addr ipv4{};
+    in6_addr ipv6{};
+    bool ip_literal = inet_pton(AF_INET, host.c_str(), &ipv4) == 1 || inet_pton(AF_INET6, host.c_str(), &ipv6) == 1;
+    // RFC 6066 sends no server name for an IP literal.
+    if (!ip_literal) SSL_set_tlsext_host_name(ssl.get(), host.c_str());
+    if (!tls.insecure && tls.ca.empty()) {
+      // The system roots: a chain to one of them is not enough on its own. The certificate must
+      // also name the host in the URL, a DNS name against a DNS SAN and an IP literal against an
+      // IP SAN. With tlsCa set, verify_pinned checks the name.
+      bool named = false;
+      if (ip_literal) {
+        named = X509_VERIFY_PARAM_set1_ip_asc(SSL_get0_param(ssl.get()), host.c_str()) == 1;
+      } else {
+        SSL_set_hostflags(ssl.get(), X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
+        named = SSL_set1_host(ssl.get(), host.c_str()) == 1;
+      }
+      if (!named) throw Error(code, url + ": cannot check the host name " + host);
+    }
     use_client_cert(ssl.get(), tls, url, code);
     if (SSL_connect(ssl.get()) != 1) {
       if (timed_out(errno)) throw Error(code, url + " did not answer within 15 s");

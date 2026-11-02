@@ -1,4 +1,8 @@
 .git
 build
-demo/generated
+# demo/generated holds the client key and certificate (and any generated test
+# user password) the demo uses. Only tlsCa's file, the iya-sts listener CA trust
+# chain, goes into an image (Dockerfile, COPY demo demo).
+demo/generated/*
+!demo/generated/idp-ca.pem
 __pycache__
