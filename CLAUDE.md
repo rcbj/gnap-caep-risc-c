@@ -49,4 +49,4 @@ Omitted or `true` keeps CAEP and RISC on, and the resolved configuration omits `
 
 MIT. Copyright (c) 2026 Iya CyberSecurity Solutions, LLC.
 
-`develop` and `main` must be the same commit. Publishing is not set up.
+`develop` and `main` must be the same commit. The library is a CMake package: `find_package(iya_gnap)` gives `iya::gnap`; static by default, shared with `BUILD_SHARED_LIBS`; `IYA_GNAP_BUILD_TESTS` and `IYA_GNAP_BUILD_PROGRAMS` default on only at the top level. `tests/package/check.sh` (run by the Docker test stage) installs both variants and builds the smoke test against each. A pull request merged into `main` releases the library after the test workflow succeeds on that commit: `release.yml` tags `v<VERSION>` and makes a GitHub Release, whose source archive is what a package recipe (such as a ConanCenter one) builds from. A direct push does not release. A tag that already exists stays; the next release is a new version in `VERSION`, which the CMake project, the package and the tag all read.

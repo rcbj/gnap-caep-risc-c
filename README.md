@@ -34,7 +34,22 @@ The library reads every PEM block of `tlsCa` and verifies the presented chain to
 
 The demo image build copies `demo/` after compiling, and `.dockerignore` admits only `demo/generated/idp-ca.pem` from `demo/generated`, so the image carries the chain at `/app/demo/generated/idp-ca.pem` with no bind mount. The client key and certificate stay out of the image. A build before the install script has run still succeeds; the image then has no chain. Rebuild the image after re-running the install script against a different iya-sts. The container also refreshes the chain at start unless `TLS_CA_REFRESH=0`.
 
-Publishing is not set up.
+## Using it from CMake
+
+The build installs the library, its public headers and a CMake package. It builds static by
+default and shared with `-DBUILD_SHARED_LIBS=ON`; `-DIYA_GNAP_BUILD_TESTS=OFF -DIYA_GNAP_BUILD_PROGRAMS=OFF`
+builds the library alone (both are on only when this is the top-level project). Then:
+
+```cmake
+find_package(iya_gnap REQUIRED)
+target_link_libraries(app PRIVATE iya::gnap)
+```
+
+The package finds the library's own dependencies, and the target carries the include
+directory and C++17. The Docker test stage checks this: it installs the static and the shared
+library and builds the C++ smoke test against each through `find_package` (`tests/package/`).
+
+A pull request merged into `main` releases the library after the test workflow succeeds on that commit: `release.yml` tags `v<VERSION>` and makes a GitHub Release, whose source archive is what a package recipe (such as a ConanCenter one) builds from. A direct push does not release. A tag that already exists stays; the next release is a new version in `VERSION`, which the CMake project, the package and the tag all read.
 
 ## C API
 

@@ -7,16 +7,20 @@ WORKDIR /src
 # Only what the build and the suite read, so a new trust chain in demo/ does not
 # rebuild or retest anything.
 COPY CMakeLists.txt VERSION ./
+COPY cmake cmake
 COPY include include
 COPY src src
 COPY tests tests
 COPY scripts scripts
 RUN cmake -S . -B build && cmake --build build && ctest --test-dir build --output-on-failure
+# The installed package, static and shared, consumed through find_package.
+RUN sh tests/package/check.sh iya_gnap iya_gnap IYA_GNAP
 
 FROM debian:bookworm AS build
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential cmake pkg-config libssl-dev ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY CMakeLists.txt VERSION ./
+COPY cmake cmake
 COPY include include
 COPY src src
 COPY tests tests
