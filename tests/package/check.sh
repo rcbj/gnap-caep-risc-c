@@ -4,19 +4,19 @@
 #
 # The installed package, as a Conan recipe or any CMake user would get it.
 # Run by the Docker test stage from the repository root, after the suite, with
-# the suite's static build in ./build:
+# the suite's static build in ./build (or the directory named last):
 #
-#   sh tests/package/check.sh <package> <library file stem> <option prefix>
+#   sh tests/package/check.sh <package> <library file stem> <option prefix> [suite build dir]
 #
 # It installs that static build, builds and installs the library alone as a
 # shared library (tests and programs off), checks what each install holds, and
 # builds and runs tests/package (the C++ smoke test, linked through
 # find_package(<package>)) against each.
 set -eu
-pkg=$1 stem=$2 opt=$3
+pkg=$1 stem=$2 opt=$3 suite=${4:-build}
 version=$(tr -d '[:space:]' < VERSION)
 
-cmake --install build --prefix /tmp/pkg-static >/dev/null
+cmake --install "$suite" --prefix /tmp/pkg-static >/dev/null
 cmake -S . -B /tmp/build-shared -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON \
   -D"${opt}_BUILD_TESTS=OFF" -D"${opt}_BUILD_PROGRAMS=OFF" >/dev/null
 cmake --build /tmp/build-shared >/dev/null
