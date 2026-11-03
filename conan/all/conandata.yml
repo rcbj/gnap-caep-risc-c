@@ -1,4 +1,7 @@
 sources:
+  "0.1.1":
+    url: "https://github.com/rcbj/gnap-caep-risc-c/archive/refs/tags/v0.1.1.tar.gz"
+    sha256: "02d5016c5e1ba18583170c62c3934bf1151d38ae2fa42cd755e85c43fb143885"
   "0.1.0":
     url: "https://github.com/rcbj/gnap-caep-risc-c/archive/refs/tags/v0.1.0.tar.gz"
     sha256: "66565cfb3c2eaed5454e7b74d727cb28ed2eea76da023edc8b92d0f6d0e64853"
